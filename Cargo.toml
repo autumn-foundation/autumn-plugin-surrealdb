@@ -1,0 +1,49 @@
+[package]
+name = "autumn-plugin-surrealdb"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Autumn plugin: a SurrealDB client for Autumn apps — documents, key-value and graph queries."
+license = "Apache-2.0"
+repository = "https://github.com/madmax983/autumn-plugin-surrealdb"
+readme = "README.md"
+keywords = ["autumn", "surrealdb", "database", "graph", "plugin"]
+categories = ["web-programming", "database"]
+exclude = [".github/", "docs/", "CLAUDE.md", "clippy.toml", "proptest-regressions/"]
+
+[dependencies]
+# No default features: the host app selects the Autumn features.
+autumn-web = { version = ">=0.7, <0.8", default-features = false }
+axum = { version = "0.8", default-features = false }
+http = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Remote client only: protocol-ws and protocol-http, plus rustls for wss/https.
+# No embedded storage backends (kv-mem, kv-rocksdb, kv-surrealkv, kv-tikv).
+surrealdb = { version = "3.3.0", default-features = false, features = ["protocol-ws", "protocol-http", "rustls"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+toml = "1.1"
+tracing = "0.1"
+
+[dev-dependencies]
+proptest = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+module_name_repetitions = "allow"
+redundant_pub_crate = "allow"
