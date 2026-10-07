@@ -13,7 +13,7 @@ exclude = [".github/", "docs/", "CLAUDE.md", "clippy.toml", "proptest-regression
 
 [dependencies]
 # No default features: the host app selects the Autumn features.
-autumn-web = { version = ">=0.7, <0.8", default-features = false }
+autumn-web = { version = ">=0.8, <0.9", default-features = false }
 axum = { version = "0.8", default-features = false }
 http = "1"
 serde = { version = "1", features = ["derive"] }

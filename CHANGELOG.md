@@ -3,6 +3,15 @@
 All notable changes to this project follow
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** the plugin now depends on `autumn-web` 0.8 (`>=0.8, <0.9`).
+  Apps on `autumn-web` 0.7 must stay on 0.1.0. The plugin API that this crate
+  uses does not change in 0.8, so the public API of this crate does not
+  change. The MSRV stays at 1.88.
+
 ## [0.1.0] - 2026-09-29
 
 ### Added
