@@ -5,6 +5,12 @@ All notable changes to this project follow
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-31
+
+### Changed
+
+- Support `autumn-web` 0.9. The plugin now needs `autumn-web` 0.9.
+
 ### Changed
 
 - **Breaking:** the plugin now depends on `autumn-web` 0.8 (`>=0.8, <0.9`).
