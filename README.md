@@ -11,7 +11,7 @@ remote protocols only (`protocol-ws`, `protocol-http`, `rustls`).
 
 Add the crate, then wire the plugin in `src/main.rs`:
 
-```rust,ignore
+```rust,no_run
 use autumn_plugin_surrealdb::{SurrealDb, SurrealDbPlugin, SurrealDbResultExt as _};
 use autumn_web::prelude::*;
 

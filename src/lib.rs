@@ -69,3 +69,8 @@ pub use plugin::{PLUGIN_NAME, SurrealDbPlugin};
 
 /// The `surrealdb` crate that the plugin uses. Use it for typed access.
 pub use surrealdb;
+
+/// Compiles the Rust snippets of the README as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
