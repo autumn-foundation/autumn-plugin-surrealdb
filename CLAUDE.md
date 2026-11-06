@@ -32,6 +32,8 @@ a local `surreal start --user root --pass root`.
 
 ## Rules
 
+- README Rust snippets are doctests. Make them compile; use `no_run`, not `ignore`.
+  `tests/doc_snippets.rs` checks the TOML snippets and the version pins in the docs.
 - The plugin is a **remote client only**. Never enable embedded storage
   features (`kv-mem`, `kv-rocksdb`, `kv-surrealkv`, `kv-tikv`) — they bloat
   compile time enormously. Current deps: `protocol-ws`, `protocol-http`,
