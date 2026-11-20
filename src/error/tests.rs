@@ -111,3 +111,12 @@ fn json_error_shows_no_detail_in_text() {
     assert!(!shown.contains("sensitive value"), "{shown}");
     assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[test]
+fn a_closed_handle_is_unavailable_and_retryable() {
+    let err = SurrealDbError::Closed;
+    assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(err.is_retryable());
+    assert_eq!(err.detail(), None);
+    assert_eq!(err.to_string(), "the SurrealDB handle is closed");
+}
