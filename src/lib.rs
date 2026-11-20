@@ -48,16 +48,21 @@
 //!   database, and puts the handle in the app state.
 //! - A readiness check that runs the `version()` query.
 //!
+//! - `fleet` (feature `fleet`): one embedded SurrealKV database for each
+//!   tenant or slot, on the Autumn fleet seam.
+//!
 //! # Limits
 //!
-//! - The plugin talks to a SurrealDB server over the network. It never embeds
-//!   a database: the `surrealdb` dependency enables the remote protocols only.
+//! - [`SurrealDbPlugin`] talks to a SurrealDB server over the network. Only the
+//!   `fleet` feature adds an embedded engine (SurrealKV).
 //! - Each call has a timeout (`timeout_ms`). A timed-out call returns an error.
 //! - Logs, error text and `Debug` output never show the password or the token.
 
 mod client;
 pub mod config;
 mod error;
+#[cfg(feature = "fleet")]
+pub mod fleet;
 mod health;
 mod plugin;
 

@@ -61,6 +61,10 @@ pub enum SurrealDbError {
         timeout: Duration,
     },
 
+    /// The handle is closed. A fleet closes the handle of an idle database.
+    #[error("the SurrealDB handle is closed")]
+    Closed,
+
     /// The app does not have the plugin.
     #[error("the SurrealDB plugin is not installed: add `SurrealDbPlugin` to the app")]
     NotInstalled,
@@ -179,6 +183,7 @@ impl SurrealDbError {
         matches!(
             self,
             Self::Timeout { .. }
+                | Self::Closed
                 | Self::Database {
                     kind: ErrorKind::Connection,
                     ..
@@ -192,6 +197,7 @@ impl SurrealDbError {
         match self {
             Self::Timeout { .. } => StatusCode::GATEWAY_TIMEOUT,
             Self::NotInstalled
+            | Self::Closed
             | Self::Database {
                 kind: ErrorKind::Connection,
                 ..

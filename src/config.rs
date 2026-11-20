@@ -186,24 +186,7 @@ impl SurrealDbConfig {
     ///
     /// See `resolve`.
     pub fn resolve_with_env(section: &str, env: &dyn Env) -> Result<Self, ConfigError> {
-        let (selected, profile) = active_profile(env);
-        let mut merged = toml::Table::new();
-        if let Some(base) = read_toml(&config_file("autumn.toml", env))? {
-            merge_section(&mut merged, base.get(section), section)?;
-            for name in inline_profile_names(&profile) {
-                let inline = base
-                    .get("profile")
-                    .and_then(|p| p.get(name))
-                    .and_then(|p| p.get(section));
-                merge_section(&mut merged, inline, section)?;
-            }
-        }
-        for name in autumn_web::config::profile_override_file_lookup_names(&profile, &selected) {
-            if let Some(file) = read_toml(&config_file(&format!("autumn-{name}.toml"), env))? {
-                merge_section(&mut merged, file.get(section), section)?;
-                break;
-            }
-        }
+        let mut merged = section_table(section, env)?;
         apply_env(&mut merged, section, env)?;
         let config: Self = toml::Value::Table(merged)
             .try_into()
@@ -284,8 +267,48 @@ impl SurrealDbConfig {
     }
 }
 
+/// Merges `[section]` from the app files, without the environment.
+///
+/// The layers are `autumn.toml`, its inline profile, then `autumn-<profile>.toml`.
+pub(crate) fn section_table(section: &str, env: &dyn Env) -> Result<toml::Table, ConfigError> {
+    let (selected, profile) = active_profile(env);
+    let mut merged = toml::Table::new();
+    if let Some(base) = read_toml(&config_file("autumn.toml", env))? {
+        merge_section(&mut merged, base.get(section), section)?;
+        for name in inline_profile_names(&profile) {
+            let inline = base
+                .get("profile")
+                .and_then(|p| p.get(name))
+                .and_then(|p| p.get(section));
+            merge_section(&mut merged, inline, section)?;
+        }
+    }
+    for name in autumn_web::config::profile_override_file_lookup_names(&profile, &selected) {
+        if let Some(file) = read_toml(&config_file(&format!("autumn-{name}.toml"), env))? {
+            merge_section(&mut merged, file.get(section), section)?;
+            break;
+        }
+    }
+    Ok(merged)
+}
+
+/// The variable prefix of `section`: `AUTUMN_<SECTION>__`.
+pub(crate) fn env_prefix(section: &str) -> String {
+    let name: String = section
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("AUTUMN_{name}__")
+}
+
 /// Gives the broken rule of a namespace or database name, if any.
-fn name_rule(name: &str) -> Option<&'static str> {
+pub(crate) fn name_rule(name: &str) -> Option<&'static str> {
     if name.is_empty() {
         return Some("must not be empty");
     }
@@ -373,18 +396,9 @@ fn deep_merge(into: &mut toml::Table, layer: &toml::Table) {
 }
 
 fn apply_env(into: &mut toml::Table, section: &str, env: &dyn Env) -> Result<(), ConfigError> {
-    let name: String = section
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let prefix = env_prefix(section);
     for (key, kind) in LEAVES {
-        let name = format!("AUTUMN_{name}__{}", key.to_ascii_uppercase());
+        let name = format!("{prefix}{}", key.to_ascii_uppercase());
         let Ok(raw) = env.var(&name) else {
             continue;
         };

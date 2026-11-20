@@ -2,8 +2,9 @@
 //!
 //! # Contract
 //!
-//! - The plugin speaks to a SurrealDB server over the network. It never embeds
-//!   a database: the `surrealdb` dependency enables the remote protocols only.
+//! - [`SurrealDb::connect`] speaks to a SurrealDB server over the network.
+//!   With the `fleet` feature, the fleet engine also opens embedded SurrealKV
+//!   databases through the same handle type.
 //! - `connect` opens one connection, signs in, and selects the namespace and
 //!   the database. The handle is cheap to clone and shares the connection.
 //! - The record helpers speak `serde`: values go in as JSON and come back as
@@ -13,10 +14,13 @@
 //! - `create_record` merges nothing: it writes the whole document. Use
 //!   `update_record` to merge fields into an existing document.
 //! - Every call has the `timeout_ms` timeout. A timed-out call returns an error.
+//! - A closed handle refuses each call with [`SurrealDbError::Closed`]. A call
+//!   that started before the close runs to its end.
 //! - The error text never shows the password or the token.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -34,11 +38,38 @@ use crate::error::SurrealDbError;
 enum Engine {
     Ws(Surreal<WsClient>),
     Http(Surreal<HttpClient>),
+    /// An embedded SurrealKV database of a fleet.
+    #[cfg(feature = "fleet")]
+    Local(Surreal<surrealdb::engine::local::Db>),
+}
+
+/// Runs `$body` with `$db` bound to the client of each engine variant.
+macro_rules! dispatch {
+    ($engine:expr, $db:ident => $body:expr) => {
+        match $engine {
+            Engine::Ws($db) => $body,
+            Engine::Http($db) => $body,
+            #[cfg(feature = "fleet")]
+            Engine::Local($db) => $body,
+        }
+    };
 }
 
 struct Inner {
-    engine: Engine,
+    /// `None` after a close. The client closes when the last clone drops.
+    engine: RwLock<Option<Engine>>,
+    /// The calls that run now.
+    busy: AtomicUsize,
     config: SurrealDbConfig,
+}
+
+/// Counts one running call until it drops.
+struct Busy<'a>(&'a AtomicUsize);
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// The SurrealDB handle. Clone it freely: clones share the connection.
@@ -209,12 +240,106 @@ impl SurrealDb {
         let engine = tokio::time::timeout(timeout, setup)
             .await
             .map_err(|_| SurrealDbError::Timeout { timeout })??;
-        Ok(Self {
+        Ok(Self::from_engine(engine, config.clone()))
+    }
+
+    fn from_engine(engine: Engine, config: SurrealDbConfig) -> Self {
+        Self {
             inner: Arc::new(Inner {
-                engine,
-                config: config.clone(),
+                engine: RwLock::new(Some(engine)),
+                busy: AtomicUsize::new(0),
+                config,
             }),
+        }
+    }
+
+    /// Opens the embedded SurrealKV database in the directory `store`.
+    ///
+    /// The open fails at once when another handle holds the directory.
+    /// `config` gives the namespace, the database and the timeout.
+    #[cfg(feature = "fleet")]
+    pub(crate) async fn open_local(
+        store: &std::path::Path,
+        config: SurrealDbConfig,
+    ) -> Result<Self, SurrealDbError> {
+        use surrealdb::engine::local::{Db, SurrealKv};
+        let timeout = config.timeout();
+        let path = store.display().to_string();
+        let setup = async {
+            let db: Surreal<Db> = Surreal::new::<SurrealKv>(path.as_str()).await?;
+            db.use_ns(config.namespace.clone())
+                .use_db(config.database.clone())
+                .await?;
+            Ok::<_, surrealdb::Error>(db)
+        };
+        let db = tokio::time::timeout(timeout, setup)
+            .await
+            .map_err(|_| SurrealDbError::Timeout { timeout })??;
+        Ok(Self::from_engine(Engine::Local(db), config))
+    }
+
+    /// Refuses new calls and drops the client of this handle.
+    ///
+    /// The connection closes when the last running call ends.
+    #[cfg(feature = "fleet")]
+    pub(crate) fn close_now(&self) {
+        self.inner
+            .engine
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+    }
+
+    /// Returns `true` after a close.
+    #[cfg(feature = "fleet")]
+    pub(crate) fn is_closed(&self) -> bool {
+        self.inner
+            .engine
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_none()
+    }
+
+    /// Returns `true` while a call runs.
+    #[cfg(feature = "fleet")]
+    pub(crate) fn is_busy(&self) -> bool {
+        self.inner.busy.load(Ordering::SeqCst) > 0
+    }
+
+    /// Writes a SurrealQL export of the database to `file`.
+    #[cfg(feature = "fleet")]
+    pub(crate) async fn export_to(&self, file: &std::path::Path) -> Result<(), SurrealDbError> {
+        let (engine, _busy) = self.engine()?;
+        let file = file.to_path_buf();
+        call(self.inner.config.timeout(), async move {
+            dispatch!(&engine, db => db.export(file).await)
         })
+        .await
+    }
+
+    /// Runs the SurrealQL export in `file` on the database.
+    #[cfg(feature = "fleet")]
+    pub(crate) async fn import_from(&self, file: &std::path::Path) -> Result<(), SurrealDbError> {
+        let (engine, _busy) = self.engine()?;
+        let file = file.to_path_buf();
+        call(self.inner.config.timeout(), async move {
+            dispatch!(&engine, db => db.import(file).await)
+        })
+        .await
+    }
+
+    /// Gets the client and counts the call. Fails after a close.
+    fn engine(&self) -> Result<(Engine, Busy<'_>), SurrealDbError> {
+        self.inner.busy.fetch_add(1, Ordering::SeqCst);
+        let busy = Busy(&self.inner.busy);
+        let engine = self
+            .inner
+            .engine
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or(SurrealDbError::Closed)?;
+        Ok((engine, busy))
     }
 
     /// Gets the handle from the app state, for example in a job or a task.
@@ -245,14 +370,9 @@ impl SurrealDb {
         data: &T,
     ) -> Result<serde_json::Value, SurrealDbError> {
         let data = serde_json::to_value(data).map_err(|err| SurrealDbError::json(&err))?;
-        let timeout = self.inner.config.timeout();
-        let run = async {
-            match &self.inner.engine {
-                Engine::Ws(db) => create_one(db, table, id, data.clone()).await,
-                Engine::Http(db) => create_one(db, table, id, data.clone()).await,
-            }
-        };
-        call(timeout, run).await
+        let (engine, _busy) = self.engine()?;
+        let run = async { dispatch!(&engine, db => create_one(db, table, id, data.clone()).await) };
+        call(self.inner.config.timeout(), run).await
     }
 
     /// Reads one document from `table`. Returns `None` if the record is missing.
@@ -265,14 +385,9 @@ impl SurrealDb {
         table: &str,
         id: &str,
     ) -> Result<Option<serde_json::Value>, SurrealDbError> {
-        let timeout = self.inner.config.timeout();
-        let run = async {
-            match &self.inner.engine {
-                Engine::Ws(db) => select_one(db, table, id).await,
-                Engine::Http(db) => select_one(db, table, id).await,
-            }
-        };
-        call(timeout, run).await
+        let (engine, _busy) = self.engine()?;
+        let run = async { dispatch!(&engine, db => select_one(db, table, id).await) };
+        call(self.inner.config.timeout(), run).await
     }
 
     /// Reads every document in `table`.
@@ -281,14 +396,9 @@ impl SurrealDb {
     ///
     /// Returns [`SurrealDbError`] if the server refuses the read or the call times out.
     pub async fn select_all(&self, table: &str) -> Result<Vec<serde_json::Value>, SurrealDbError> {
-        let timeout = self.inner.config.timeout();
-        let run = async {
-            match &self.inner.engine {
-                Engine::Ws(db) => select_many(db, table).await,
-                Engine::Http(db) => select_many(db, table).await,
-            }
-        };
-        call(timeout, run).await
+        let (engine, _busy) = self.engine()?;
+        let run = async { dispatch!(&engine, db => select_many(db, table).await) };
+        call(self.inner.config.timeout(), run).await
     }
 
     /// Merges `data` into the document `table:id`. Returns `None` if the
@@ -305,14 +415,9 @@ impl SurrealDb {
         data: &T,
     ) -> Result<Option<serde_json::Value>, SurrealDbError> {
         let data = serde_json::to_value(data).map_err(|err| SurrealDbError::json(&err))?;
-        let timeout = self.inner.config.timeout();
-        let run = async {
-            match &self.inner.engine {
-                Engine::Ws(db) => update_one(db, table, id, data.clone()).await,
-                Engine::Http(db) => update_one(db, table, id, data.clone()).await,
-            }
-        };
-        call(timeout, run).await
+        let (engine, _busy) = self.engine()?;
+        let run = async { dispatch!(&engine, db => update_one(db, table, id, data.clone()).await) };
+        call(self.inner.config.timeout(), run).await
     }
 
     /// Deletes the document `table:id`. Returns the deleted document,
@@ -326,14 +431,9 @@ impl SurrealDb {
         table: &str,
         id: &str,
     ) -> Result<Option<serde_json::Value>, SurrealDbError> {
-        let timeout = self.inner.config.timeout();
-        let run = async {
-            match &self.inner.engine {
-                Engine::Ws(db) => delete_one(db, table, id).await,
-                Engine::Http(db) => delete_one(db, table, id).await,
-            }
-        };
-        call(timeout, run).await
+        let (engine, _busy) = self.engine()?;
+        let run = async { dispatch!(&engine, db => delete_one(db, table, id).await) };
+        call(self.inner.config.timeout(), run).await
     }
 
     /// Runs raw SurrealQL with bound variables. Each `$name` in `sql` reads
@@ -351,14 +451,9 @@ impl SurrealDb {
         bindings: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<surrealdb::IndexedResults, SurrealDbError> {
         let vars = serde_json::Value::Object(bindings.clone());
-        let timeout = self.inner.config.timeout();
-        let run = async {
-            match &self.inner.engine {
-                Engine::Ws(db) => run_query(db, sql, vars.clone()).await,
-                Engine::Http(db) => run_query(db, sql, vars.clone()).await,
-            }
-        };
-        call(timeout, run).await
+        let (engine, _busy) = self.engine()?;
+        let run = async { dispatch!(&engine, db => run_query(db, sql, vars.clone()).await) };
+        call(self.inner.config.timeout(), run).await
     }
 
     /// Runs raw SurrealQL with bound variables and returns each statement's
@@ -387,14 +482,11 @@ impl SurrealDb {
     ///
     /// Returns [`SurrealDbError`] if the server does not answer or the call times out.
     pub async fn version(&self) -> Result<String, SurrealDbError> {
-        let timeout = self.inner.config.timeout();
-        let run = async {
-            match &self.inner.engine {
-                Engine::Ws(db) => db.version().await,
-                Engine::Http(db) => db.version().await,
-            }
-        };
-        call(timeout, run).await.map(|version| version.to_string())
+        let (engine, _busy) = self.engine()?;
+        let run = async { dispatch!(&engine, db => db.version().await) };
+        call(self.inner.config.timeout(), run)
+            .await
+            .map(|version| version.to_string())
     }
 }
 

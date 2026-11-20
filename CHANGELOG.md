@@ -5,6 +5,21 @@ All notable changes to this project follow
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-20
+
+### Added
+
+- The `fleet` feature: one embedded SurrealKV database for each tenant or
+  slot, on the Autumn fleet seam. `SurrealDbFleetPlugin` reads
+  `[surrealdb_fleet]`, and `FleetSurrealDb` is the extractor. Snapshots are
+  SurrealQL exports. The engine passes the Autumn fleet conformance kit.
+- `SurrealDbError::Closed`: a call on a closed fleet handle. It maps to 503.
+
+### Changed
+
+- **Breaking:** Support `autumn-web` 0.11. The plugin now needs `autumn-web`
+  0.11. Apps on `autumn-web` 0.10 stay on 0.3.0.
+
 ## [0.3.0] - 2026-11-06
 
 ### Changed

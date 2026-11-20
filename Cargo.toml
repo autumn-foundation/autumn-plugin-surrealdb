@@ -1,6 +1,6 @@
 [package]
 name = "autumn-plugin-surrealdb"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.97"
 description = "Autumn plugin: a SurrealDB client for Autumn apps — documents, key-value and graph queries."
@@ -11,15 +11,21 @@ keywords = ["autumn", "surrealdb", "database", "graph", "plugin"]
 categories = ["web-programming", "database"]
 exclude = [".github/", "docs/", "CLAUDE.md", "clippy.toml", "proptest-regressions/"]
 
+[features]
+default = []
+# A fleet of embedded SurrealKV databases: one for each tenant or slot.
+# It adds the embedded engine. The remote client does not need it.
+fleet = ["autumn-web/db", "surrealdb/kv-surrealkv"]
+
 [dependencies]
 # No default features: the host app selects the Autumn features.
-autumn-web = { version = ">=0.10, <0.11", default-features = false }
+autumn-web = { version = ">=0.11, <0.12", default-features = false }
 axum = { version = "0.8", default-features = false }
 http = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Remote client only: protocol-ws and protocol-http, plus rustls for wss/https.
-# No embedded storage backends (kv-mem, kv-rocksdb, kv-surrealkv, kv-tikv).
+# The remote client: protocol-ws and protocol-http, plus rustls for wss/https.
+# The `fleet` feature adds kv-surrealkv. No other embedded backend.
 surrealdb = { version = "3.3.0", default-features = false, features = ["protocol-ws", "protocol-http", "rustls"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync", "time"] }
@@ -27,11 +33,15 @@ toml = "1.1"
 tracing = "0.1"
 
 [dev-dependencies]
+autumn-web = { version = ">=0.11, <0.12", default-features = false, features = ["plugin-conformance", "sqlite"] }
 proptest = "1"
+tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 
 [package.metadata.docs.rs]
 all-features = true
+# `autumn-web/db` needs a backend to build.
+features = ["autumn-web/sqlite"]
 
 [lints.rust]
 unsafe_code = "forbid"
