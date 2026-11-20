@@ -43,6 +43,13 @@ fn test_engine() -> SurrealKvEngine {
 impl FleetFixture for Fixture {
     type Engine = SurrealKvEngine;
 
+    // The trait needs an `async fn`. This body has no `.await`, and Clippy
+    // flags that. Older Clippy releases do not know the lint.
+    #[allow(
+        unknown_lints,
+        clippy::unused_async_trait_impl,
+        reason = "the FleetFixture trait sets the signature"
+    )]
     async fn fleet(
         &self,
         config: DatabaseFleetConfig,
